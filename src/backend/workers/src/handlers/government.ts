@@ -1,27 +1,19 @@
 /**
  * API endpoints for government database integration
+ * Uses configuration-based adapters for production readiness
  */
 
 import { Request as IttyRequest } from 'itty-router';
 import { z } from 'zod';
-import { MLHCPAdapter } from '../../services/government/adapters/mlhcp-adapter';
-import { NRAAdapter } from '../../services/government/adapters/nra-adapter';
-import { DataReconciler } from '../../services/government/reconciliation/data-reconciler';
-import { DistrictName } from '../../services/government/schemas/government-data.types';
+import { MLHCPAdapter } from '../../../services/government/adapters/mlhcp-adapter';
+import { NRAAdapter } from '../../../services/government/adapters/nra-adapter';
+import { DataReconciler } from '../../../services/government/reconciliation/data-reconciler';
+import { DistrictName } from '../../../services/government/schemas/government-data.types';
 import { jsonResponse } from '../middleware/jsonResponse';
+import { getConfig } from '../services/config';
+import { checkRateLimit } from '../services/rateLimit';
 
-/**
- * Search schema for government records
- */
-const SearchSchema = z.object({
-  ownerName: z.string().optional(),
-  nationalId: z.string().optional(),
-  landId: z.string().optional(),
-  district: z.string().optional(),
-  landType: z.enum(['residential', 'commercial', 'agricultural', 'industrial', 'mixed']).optional(),
-  limit: z.number().min(1).max(100).default(10),
-  offset: z.number().min(0).default(0)
-});
+// SearchSchema removed - using direct parameter validation instead
 
 /**
  * Reconcile records schema
@@ -33,17 +25,47 @@ const ReconcileSchema = z.object({
 });
 
 /**
- * Initialize adapters (in production, these would be singletons)
+ * Get adapter instances with caching
  */
-const mlhcpAdapter = new MLHCPAdapter({ mockMode: true });
-const nraAdapter = new NRAAdapter({ mockMode: true });
-const reconciler = new DataReconciler();
+const adapterCache = new Map<string, any>();
+
+function getMLHCPAdapter(env: any): MLHCPAdapter {
+  if (!adapterCache.has('mlhcp')) {
+    const config = getConfig(env);
+    adapterCache.set('mlhcp', new MLHCPAdapter({
+      mockMode: config.mockMode,
+      baseUrl: config.government.mlhcp.baseUrl,
+      apiKey: config.government.mlhcp.apiKey,
+      timeout: config.government.mlhcp.timeout
+    }));
+  }
+  return adapterCache.get('mlhcp');
+}
+
+function getNRAAdapter(env: any): NRAAdapter {
+  if (!adapterCache.has('nra')) {
+    const config = getConfig(env);
+    adapterCache.set('nra', new NRAAdapter({
+      mockMode: config.mockMode,
+      baseUrl: config.government.nra.baseUrl,
+      apiKey: config.government.nra.apiKey,
+      timeout: config.government.nra.timeout
+    }));
+  }
+  return adapterCache.get('nra');
+}
 
 /**
  * GET /api/government/mlhcp/search
  * Search MLHCP land records
  */
-export async function searchMLHCP(request: IttyRequest): Promise<Response> {
+export async function searchMLHCP(request: IttyRequest, env: any): Promise<Response> {
+  // Check rate limit for government queries
+  const rateLimitResponse = await checkRateLimit(request, env, 'governmentQueries');
+  if (rateLimitResponse && rateLimitResponse.status === 429) {
+    return rateLimitResponse;
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const params = {
@@ -56,7 +78,8 @@ export async function searchMLHCP(request: IttyRequest): Promise<Response> {
     const limit = parseInt(searchParams.get('limit') || '10');
     const offset = parseInt(searchParams.get('offset') || '0');
     
-    // Search MLHCP records
+    // Get adapter and search
+    const mlhcpAdapter = getMLHCPAdapter(env);
     const result = await mlhcpAdapter.query(params, { limit, offset });
     
     return jsonResponse({
@@ -68,9 +91,11 @@ export async function searchMLHCP(request: IttyRequest): Promise<Response> {
       }
     });
   } catch (error) {
+    console.error('MLHCP search error:', error);
     return jsonResponse({
       success: false,
-      error: 'Failed to search MLHCP records'
+      error: 'Failed to search MLHCP records',
+      message: error instanceof Error ? error.message : undefined
     }, 500);
   }
 }
@@ -79,9 +104,15 @@ export async function searchMLHCP(request: IttyRequest): Promise<Response> {
  * GET /api/government/mlhcp/:landId
  * Get specific MLHCP record
  */
-export async function getMLHCPRecord(request: IttyRequest): Promise<Response> {
+export async function getMLHCPRecord(request: IttyRequest, env: any): Promise<Response> {
+  const rateLimitResponse = await checkRateLimit(request, env, 'governmentQueries');
+  if (rateLimitResponse && rateLimitResponse.status === 429) {
+    return rateLimitResponse;
+  }
+
   try {
     const { landId } = request.params;
+    const mlhcpAdapter = getMLHCPAdapter(env);
     const result = await mlhcpAdapter.getById(landId);
     
     if (!result.data) {
@@ -97,6 +128,7 @@ export async function getMLHCPRecord(request: IttyRequest): Promise<Response> {
       warnings: result.warnings
     });
   } catch (error) {
+    console.error('Get MLHCP record error:', error);
     return jsonResponse({
       success: false,
       error: 'Failed to retrieve MLHCP record'
@@ -108,7 +140,12 @@ export async function getMLHCPRecord(request: IttyRequest): Promise<Response> {
  * GET /api/government/nra/search
  * Search NRA tax records
  */
-export async function searchNRA(request: IttyRequest): Promise<Response> {
+export async function searchNRA(request: IttyRequest, env: any): Promise<Response> {
+  const rateLimitResponse = await checkRateLimit(request, env, 'governmentQueries');
+  if (rateLimitResponse && rateLimitResponse.status === 429) {
+    return rateLimitResponse;
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const params = {
@@ -124,7 +161,7 @@ export async function searchNRA(request: IttyRequest): Promise<Response> {
     const limit = parseInt(searchParams.get('limit') || '10');
     const offset = parseInt(searchParams.get('offset') || '0');
     
-    // Search NRA records
+    const nraAdapter = getNRAAdapter(env);
     const result = await nraAdapter.query(params, { limit, offset });
     
     return jsonResponse({
@@ -136,6 +173,7 @@ export async function searchNRA(request: IttyRequest): Promise<Response> {
       }
     });
   } catch (error) {
+    console.error('NRA search error:', error);
     return jsonResponse({
       success: false,
       error: 'Failed to search NRA records'
@@ -147,9 +185,15 @@ export async function searchNRA(request: IttyRequest): Promise<Response> {
  * GET /api/government/nra/:taxId
  * Get specific NRA record
  */
-export async function getNRARecord(request: IttyRequest): Promise<Response> {
+export async function getNRARecord(request: IttyRequest, env: any): Promise<Response> {
+  const rateLimitResponse = await checkRateLimit(request, env, 'governmentQueries');
+  if (rateLimitResponse && rateLimitResponse.status === 429) {
+    return rateLimitResponse;
+  }
+
   try {
     const { taxId } = request.params;
+    const nraAdapter = getNRAAdapter(env);
     const result = await nraAdapter.getById(taxId);
     
     if (!result.data) {
@@ -165,6 +209,7 @@ export async function getNRARecord(request: IttyRequest): Promise<Response> {
       warnings: result.warnings
     });
   } catch (error) {
+    console.error('Get NRA record error:', error);
     return jsonResponse({
       success: false,
       error: 'Failed to retrieve NRA record'
@@ -176,9 +221,15 @@ export async function getNRARecord(request: IttyRequest): Promise<Response> {
  * GET /api/government/nra/:taxId/compliance
  * Check tax compliance for a property
  */
-export async function checkTaxCompliance(request: IttyRequest): Promise<Response> {
+export async function checkTaxCompliance(request: IttyRequest, env: any): Promise<Response> {
+  const rateLimitResponse = await checkRateLimit(request, env, 'governmentQueries');
+  if (rateLimitResponse && rateLimitResponse.status === 429) {
+    return rateLimitResponse;
+  }
+
   try {
     const { taxId } = request.params;
+    const nraAdapter = getNRAAdapter(env);
     const compliance = await nraAdapter.calculateCompliance(taxId);
     
     return jsonResponse({
@@ -186,6 +237,7 @@ export async function checkTaxCompliance(request: IttyRequest): Promise<Response
       data: compliance
     });
   } catch (error) {
+    console.error('Tax compliance check error:', error);
     return jsonResponse({
       success: false,
       error: 'Failed to check tax compliance'
@@ -197,7 +249,12 @@ export async function checkTaxCompliance(request: IttyRequest): Promise<Response
  * POST /api/government/reconcile
  * Reconcile records from multiple government sources
  */
-export async function reconcileRecords(request: IttyRequest): Promise<Response> {
+export async function reconcileRecords(request: IttyRequest, env: any): Promise<Response> {
+  const rateLimitResponse = await checkRateLimit(request, env, 'governmentQueries');
+  if (rateLimitResponse && rateLimitResponse.status === 429) {
+    return rateLimitResponse;
+  }
+
   try {
     const body = await request.json();
     const validated = ReconcileSchema.parse(body);
@@ -207,11 +264,13 @@ export async function reconcileRecords(request: IttyRequest): Promise<Response> 
     let nraRecord = null;
     
     if (validated.mlhcpId) {
+      const mlhcpAdapter = getMLHCPAdapter(env);
       const mlhcpResult = await mlhcpAdapter.getById(validated.mlhcpId);
       mlhcpRecord = mlhcpResult.data;
     }
     
     if (validated.nraId) {
+      const nraAdapter = getNRAAdapter(env);
       const nraResult = await nraAdapter.getById(validated.nraId);
       nraRecord = nraResult.data;
     }
@@ -225,6 +284,7 @@ export async function reconcileRecords(request: IttyRequest): Promise<Response> 
     }
     
     // Reconcile the records
+    const reconciler = new DataReconciler();
     const result = await reconciler.reconcile(mlhcpRecord, nraRecord);
     
     return jsonResponse({
@@ -237,6 +297,8 @@ export async function reconcileRecords(request: IttyRequest): Promise<Response> 
       }
     });
   } catch (error) {
+    console.error('Reconcile records error:', error);
+    
     if (error instanceof z.ZodError) {
       return jsonResponse({
         success: false,
@@ -253,10 +315,70 @@ export async function reconcileRecords(request: IttyRequest): Promise<Response> 
 }
 
 /**
+ * Process search results from multiple sources
+ * Extracted to reduce function size
+ */
+async function processUnifiedSearchResults(
+  mlhcpResult: any,
+  nraResult: any,
+  reconciler: DataReconciler,
+  limit: number
+): Promise<any[]> {
+  const unifiedResults = [];
+  const processedNraIds = new Set();
+  
+  // Process MLHCP records
+  for (const mlhcp of mlhcpResult.data) {
+    const nraMatch = findNRAMatch(mlhcp, nraResult.data, processedNraIds);
+    
+    if (nraMatch) {
+      processedNraIds.add(nraMatch.taxId);
+    }
+    
+    const reconciled = await reconciler.reconcile(mlhcp, nraMatch || undefined);
+    unifiedResults.push(reconciled);
+  }
+  
+  // Add NRA records without MLHCP matches
+  for (const nra of nraResult.data) {
+    if (!processedNraIds.has(nra.taxId)) {
+      const reconciled = await reconciler.reconcile(undefined, nra);
+      unifiedResults.push(reconciled);
+    }
+  }
+  
+  return unifiedResults.slice(0, limit);
+}
+
+/**
+ * Find matching NRA record for MLHCP record
+ * Extracted to reduce function size
+ */
+function findNRAMatch(mlhcp: any, nraRecords: any[], processedIds: Set<string>): any {
+  return nraRecords.find(nra => {
+    if (processedIds.has(nra.taxId)) return false;
+    
+    // Name matching
+    const nameMatch = nra.taxpayerName.toLowerCase().includes(mlhcp.ownerName.toLowerCase()) ||
+                     mlhcp.ownerName.toLowerCase().includes(nra.taxpayerName.toLowerCase());
+    
+    // Reference matching
+    const refMatch = nra.propertyRef === mlhcp.landId;
+    
+    return nameMatch || refMatch;
+  });
+}
+
+/**
  * GET /api/government/search/unified
  * Search across all government sources and return unified results
  */
-export async function unifiedSearch(request: IttyRequest): Promise<Response> {
+export async function unifiedSearch(request: IttyRequest, env: any): Promise<Response> {
+  const rateLimitResponse = await checkRateLimit(request, env, 'governmentQueries');
+  if (rateLimitResponse && rateLimitResponse.status === 429) {
+    return rateLimitResponse;
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const ownerName = searchParams.get('ownerName');
@@ -271,58 +393,42 @@ export async function unifiedSearch(request: IttyRequest): Promise<Response> {
       }, 400);
     }
     
+    // Get adapters
+    const mlhcpAdapter = getMLHCPAdapter(env);
+    const nraAdapter = getNRAAdapter(env);
+    
     // Search both sources in parallel
     const [mlhcpResult, nraResult] = await Promise.all([
       mlhcpAdapter.query({ ownerName, district }, { limit, offset }),
       nraAdapter.query({ taxpayerName: ownerName }, { limit, offset })
     ]);
     
-    // Group by likely matches and reconcile
-    const unifiedResults = [];
-    const processedNraIds = new Set();
-    
-    // Process MLHCP records
-    for (const mlhcp of mlhcpResult.data) {
-      // Find potential NRA match
-      const nraMatch = nraResult.data.find(nra => {
-        if (processedNraIds.has(nra.taxId)) return false;
-        
-        // Simple matching logic (in production, use fuzzy matching)
-        const nameMatch = nra.taxpayerName.toLowerCase().includes(mlhcp.ownerName.toLowerCase()) ||
-                         mlhcp.ownerName.toLowerCase().includes(nra.taxpayerName.toLowerCase());
-        const refMatch = nra.propertyRef === mlhcp.landId;
-        
-        return nameMatch || refMatch;
-      });
-      
-      if (nraMatch) {
-        processedNraIds.add(nraMatch.taxId);
-      }
-      
-      // Reconcile if match found
-      const reconciled = await reconciler.reconcile(mlhcp, nraMatch || undefined);
-      unifiedResults.push(reconciled);
-    }
-    
-    // Add NRA records without MLHCP matches
-    for (const nra of nraResult.data) {
-      if (!processedNraIds.has(nra.taxId)) {
-        const reconciled = await reconciler.reconcile(undefined, nra);
-        unifiedResults.push(reconciled);
-      }
-    }
+    // Process and reconcile results
+    const reconciler = new DataReconciler();
+    const unifiedResults = await processUnifiedSearchResults(
+      mlhcpResult,
+      nraResult,
+      reconciler,
+      limit
+    );
     
     return jsonResponse({
       success: true,
       data: {
-        results: unifiedResults.slice(0, limit),
+        results: unifiedResults,
         totalMLHCP: mlhcpResult.metadata.recordCount,
         totalNRA: nraResult.metadata.recordCount,
         totalUnified: unifiedResults.length,
         warnings: [...(mlhcpResult.warnings || []), ...(nraResult.warnings || [])]
+      },
+      metadata: {
+        searchParams: { ownerName, district },
+        limit,
+        offset
       }
     });
   } catch (error) {
+    console.error('Unified search error:', error);
     return jsonResponse({
       success: false,
       error: 'Failed to perform unified search'
@@ -334,8 +440,19 @@ export async function unifiedSearch(request: IttyRequest): Promise<Response> {
  * GET /api/government/health
  * Check health status of government integrations
  */
-export async function checkHealth(request: IttyRequest): Promise<Response> {
+export async function checkHealth(request: IttyRequest, env: any): Promise<Response> {
+  // Cache health check results for 60 seconds
+  const cacheKey = 'government:health';
+  const cached = await env.CACHE.get(cacheKey);
+  
+  if (cached) {
+    return jsonResponse(JSON.parse(cached));
+  }
+
   try {
+    const mlhcpAdapter = getMLHCPAdapter(env);
+    const nraAdapter = getNRAAdapter(env);
+    
     const [mlhcpHealth, nraHealth] = await Promise.all([
       mlhcpAdapter.checkHealth(),
       nraAdapter.checkHealth()
@@ -347,7 +464,7 @@ export async function checkHealth(request: IttyRequest): Promise<Response> {
       ? 'unhealthy'
       : 'degraded';
     
-    return jsonResponse({
+    const response = {
       success: true,
       data: {
         status: overall,
@@ -357,8 +474,14 @@ export async function checkHealth(request: IttyRequest): Promise<Response> {
         },
         timestamp: new Date()
       }
-    });
+    };
+    
+    // Cache for 60 seconds
+    await env.CACHE.put(cacheKey, JSON.stringify(response), { expirationTtl: 60 });
+    
+    return jsonResponse(response);
   } catch (error) {
+    console.error('Health check error:', error);
     return jsonResponse({
       success: false,
       error: 'Failed to check health status'
@@ -368,9 +491,17 @@ export async function checkHealth(request: IttyRequest): Promise<Response> {
 
 /**
  * GET /api/government/districts
- * Get list of valid districts
+ * Get list of valid districts with caching
  */
-export async function getDistricts(request: IttyRequest): Promise<Response> {
+export async function getDistricts(request: IttyRequest, env: any): Promise<Response> {
+  // Cache districts data for 24 hours
+  const cacheKey = 'government:districts';
+  const cached = await env.CACHE.get(cacheKey);
+  
+  if (cached) {
+    return jsonResponse(JSON.parse(cached));
+  }
+
   const districts = [
     // Eastern Province
     { name: 'Kailahun', code: 'KL', province: 'Eastern' },
@@ -399,11 +530,16 @@ export async function getDistricts(request: IttyRequest): Promise<Response> {
     { name: 'Western Area Urban', code: 'WU', province: 'Western Area' }
   ];
   
-  return jsonResponse({
+  const response = {
     success: true,
     data: {
       districts,
       total: districts.length
     }
-  });
+  };
+  
+  // Cache for 24 hours
+  await env.CACHE.put(cacheKey, JSON.stringify(response), { expirationTtl: 86400 });
+  
+  return jsonResponse(response);
 }

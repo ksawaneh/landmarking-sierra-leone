@@ -10,6 +10,30 @@ JWT_SECRET = "DEV_SECRET_DO_NOT_USE_IN_PRODUCTION"
 ENVIRONMENT = "development"
 API_VERSION = "v1"
 CORS_ORIGINS = "http://localhost:3000,https://landmarking.vercel.app"
+MOCK_MODE = "true"
+
+# Government API Configuration
+MLHCP_BASE_URL = "https://api.mlhcp.gov.sl"
+MLHCP_API_KEY = "DEV_KEY"
+MLHCP_TIMEOUT = "30000"
+
+NRA_BASE_URL = "https://api.nra.gov.sl"
+NRA_API_KEY = "DEV_KEY"
+NRA_TIMEOUT = "30000"
+
+OARG_BASE_URL = "https://api.oarg.gov.sl"
+OARG_API_KEY = "DEV_KEY"
+OARG_TIMEOUT = "30000"
+
+# Biometric Service Configuration
+BIOMETRIC_SERVICE_URL = "https://biometric.landmarking.sl"
+BIOMETRIC_API_KEY = "DEV_KEY"
+BIOMETRIC_MIN_QUALITY = "60"
+
+# Rate Limiting Configuration
+RATE_LIMIT_AUTH = "100"
+RATE_LIMIT_UNAUTH = "20"
+RATE_LIMIT_GOV = "50"
 
 # Set up KV namespaces
 # KV namespaces are used for storing key-value data
@@ -23,6 +47,11 @@ binding = "CONFIG_KV"
 id = "YOUR_KV_ID_HERE" # Replace with actual KV namespace ID when deploying
 preview_id = "YOUR_PREVIEW_KV_ID_HERE" # For preview environments
 
+[[kv_namespaces]]
+binding = "CACHE"
+id = "YOUR_KV_ID_HERE" # Replace with actual KV namespace ID when deploying
+preview_id = "YOUR_PREVIEW_KV_ID_HERE" # For preview environments
+
 # Set up Durable Object namespaces
 # Durable Objects are used for more complex data storage
 [[durable_objects.bindings]]
@@ -33,10 +62,22 @@ class_name = "AuthSessionDO"
 name = "PARCEL_DATA"
 class_name = "ParcelDataDO"
 
+[[durable_objects.bindings]]
+name = "VERIFICATION_DO"
+class_name = "VerificationDO"
+
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiterDO"
+
 # Define migrations for Durable Objects
 [[migrations]]
 tag = "v1"
 new_classes = ["AuthSessionDO", "ParcelDataDO"]
+
+[[migrations]]
+tag = "v2"
+new_classes = ["VerificationDO", "RateLimiterDO"]
 
 # Custom domains will be configured in production
 [env.production]
@@ -44,17 +85,24 @@ route = { pattern = "api.landmarking.app/*", custom_domain = true }
 [env.production.vars]
 ENVIRONMENT = "production"
 CORS_ORIGINS = "https://landmarking.app,https://www.landmarking.app"
+MOCK_MODE = "false"
+# Production API endpoints and keys will be set via secrets
 
 [env.staging]
 name = "landmarking-api-staging"
 [env.staging.vars]
 ENVIRONMENT = "staging"
 CORS_ORIGINS = "https://staging.landmarking.app,https://landmarking.vercel.app"
+MOCK_MODE = "true"
 
 # Define secrets - these will be set via wrangler CLI or Cloudflare dashboard
+# To set secrets, use: wrangler secret put SECRET_NAME
 # [secrets]
 # JWT_SECRET
-# API_KEY
+# MLHCP_API_KEY
+# NRA_API_KEY
+# OARG_API_KEY
+# BIOMETRIC_API_KEY
 
 # Define R2 bucket for file storage
 [[r2_buckets]]

@@ -1,5 +1,6 @@
 /**
  * API endpoints for multi-party verification system
+ * Uses Durable Objects for persistent storage
  */
 
 import { Request as IttyRequest } from 'itty-router';
@@ -7,20 +8,40 @@ import { z } from 'zod';
 import { 
   VerificationWorkflow,
   VerificationRequirementsFactory 
-} from '../../services/verification/workflows/verification-workflow';
+} from '../../../services/verification/workflows/verification-workflow';
 import {
   VerificationRecord,
   VerificationParty,
   PartyRole,
   BiometricData
-} from '../../services/verification/types';
+} from '../../../services/verification/types';
 import { jsonResponse } from '../middleware/jsonResponse';
+import { BiometricService } from '../services/biometric';
+import { getConfig } from '../services/config';
+
+/**
+ * Sierra Leone specific validation schemas
+ */
+const ParcelIdSchema = z.string().regex(
+  /^[A-Z]{2}\/[A-Z]{2}\/\d{6}\/\d{4}$/,
+  'Invalid parcel ID format (e.g., WU/FT/001234/2024)'
+);
+
+const NationalIdSchema = z.string().regex(
+  /^SL\d{9}$/,
+  'Invalid national ID format (e.g., SL123456789)'
+);
+
+const PhoneNumberSchema = z.string().regex(
+  /^\+232\d{8}$/,
+  'Invalid phone number format (e.g., +23276123456)'
+);
 
 /**
  * Create verification request schema
  */
 const CreateVerificationSchema = z.object({
-  parcelId: z.string(),
+  parcelId: ParcelIdSchema,
   verificationType: z.enum(['initial_registration', 'transfer', 'dispute_resolution', 'update']),
   landType: z.enum(['residential', 'commercial', 'agricultural', 'industrial']),
   district: z.string(),
@@ -28,37 +49,37 @@ const CreateVerificationSchema = z.object({
 });
 
 /**
- * Add party request schema
+ * Add party request schema with stricter validation
  */
 const AddPartySchema = z.object({
   role: z.nativeEnum(PartyRole),
-  name: z.string(),
-  nationalId: z.string().optional(),
-  phoneNumber: z.string().optional(),
-  address: z.string(),
+  name: z.string().min(3).max(100),
+  nationalId: NationalIdSchema.optional(),
+  phoneNumber: PhoneNumberSchema.optional(),
+  address: z.string().min(10).max(200),
   district: z.string(),
   biometrics: z.object({
     fingerprint: z.object({
       data: z.string(),
-      quality: z.number(),
+      quality: z.number().min(0).max(100),
       captureDevice: z.string()
     }).optional(),
     face: z.object({
       data: z.string(),
-      confidence: z.number(),
+      confidence: z.number().min(0).max(100),
       captureDevice: z.string()
     }).optional(),
     voice: z.object({
       data: z.string(),
-      duration: z.number(),
+      duration: z.number().min(3),
       language: z.enum(['en', 'krio', 'temne', 'mende']),
       transcript: z.string().optional()
     }).optional(),
     captureTimestamp: z.string().transform(str => new Date(str)),
     captureLocation: z.object({
-      latitude: z.number(),
-      longitude: z.number(),
-      accuracy: z.number()
+      latitude: z.number().min(-90).max(90),
+      longitude: z.number().min(-180).max(180),
+      accuracy: z.number().min(0)
     }).optional()
   }).optional()
 });
@@ -79,17 +100,18 @@ const CollectSignatureSchema = z.object({
 });
 
 /**
- * In-memory storage for development
- * In production, use Durable Objects or database
+ * Helper to get Durable Object stub
  */
-const verificationStore = new Map<string, VerificationRecord>();
-const workflowStore = new Map<string, VerificationWorkflow>();
+function getVerificationDO(env: any, verificationId: string) {
+  const id = env.VERIFICATION_DO.idFromName(verificationId);
+  return env.VERIFICATION_DO.get(id);
+}
 
 /**
  * POST /api/verifications
  * Create a new verification request
  */
-export async function createVerification(request: IttyRequest): Promise<Response> {
+export async function createVerification(request: IttyRequest, env: any): Promise<Response> {
   try {
     const body = await request.json();
     const validated = CreateVerificationSchema.parse(body);
@@ -123,12 +145,16 @@ export async function createVerification(request: IttyRequest): Promise<Response
       }]
     };
     
-    // Create workflow
-    const workflow = new VerificationWorkflow(record);
+    // Store in Durable Object
+    const verificationDO = getVerificationDO(env, record.id);
+    await verificationDO.storeVerification(record);
     
-    // Store in memory (use database in production)
-    verificationStore.set(record.id, record);
-    workflowStore.set(record.id, workflow);
+    // Log for monitoring
+    console.log('Verification created:', {
+      id: record.id,
+      type: validated.verificationType,
+      district: validated.district
+    });
     
     return jsonResponse({
       success: true,
@@ -144,6 +170,8 @@ export async function createVerification(request: IttyRequest): Promise<Response
       }
     }, 201);
   } catch (error) {
+    console.error('Create verification error:', error);
+    
     if (error instanceof z.ZodError) {
       return jsonResponse({
         success: false,
@@ -154,7 +182,8 @@ export async function createVerification(request: IttyRequest): Promise<Response
     
     return jsonResponse({
       success: false,
-      error: 'Failed to create verification'
+      error: 'Failed to create verification',
+      message: error instanceof Error ? error.message : undefined
     }, 500);
   }
 }
@@ -163,10 +192,11 @@ export async function createVerification(request: IttyRequest): Promise<Response
  * GET /api/verifications/:id
  * Get verification details
  */
-export async function getVerification(request: IttyRequest): Promise<Response> {
+export async function getVerification(request: IttyRequest, env: any): Promise<Response> {
   try {
     const { id } = request.params;
-    const record = verificationStore.get(id);
+    const verificationDO = getVerificationDO(env, id);
+    const record = await verificationDO.getVerification(id);
     
     if (!record) {
       return jsonResponse({
@@ -175,7 +205,7 @@ export async function getVerification(request: IttyRequest): Promise<Response> {
       }, 404);
     }
     
-    // Remove sensitive data
+    // Remove sensitive biometric data
     const sanitized = {
       ...record,
       parties: record.parties.map(p => ({
@@ -194,6 +224,7 @@ export async function getVerification(request: IttyRequest): Promise<Response> {
       data: sanitized
     });
   } catch (error) {
+    console.error('Get verification error:', error);
     return jsonResponse({
       success: false,
       error: 'Failed to retrieve verification'
@@ -205,20 +236,43 @@ export async function getVerification(request: IttyRequest): Promise<Response> {
  * POST /api/verifications/:id/parties
  * Add a party to the verification
  */
-export async function addParty(request: IttyRequest): Promise<Response> {
+export async function addParty(request: IttyRequest, env: any): Promise<Response> {
   try {
     const { id } = request.params;
-    const workflow = workflowStore.get(id);
+    const body = await request.json();
+    const validated = AddPartySchema.parse(body);
     
-    if (!workflow) {
+    // Get verification from Durable Object
+    const verificationDO = getVerificationDO(env, id);
+    const record = await verificationDO.getVerification(id);
+    
+    if (!record) {
       return jsonResponse({
         success: false,
         error: 'Verification not found'
       }, 404);
     }
     
-    const body = await request.json();
-    const validated = AddPartySchema.parse(body);
+    // Create workflow instance
+    const workflow = new VerificationWorkflow(record);
+    
+    // Validate biometrics if provided
+    if (validated.biometrics) {
+      const config = getConfig(env);
+      const biometricService = new BiometricService(config);
+      
+      const validation = biometricService.validateBiometricQuality(
+        validated.biometrics as BiometricData
+      );
+      
+      if (!validation.isValid) {
+        return jsonResponse({
+          success: false,
+          error: 'Biometric validation failed',
+          details: validation.issues
+        }, 400);
+      }
+    }
     
     // Create party record
     const party: VerificationParty = {
@@ -238,11 +292,8 @@ export async function addParty(request: IttyRequest): Promise<Response> {
       }, 400);
     }
     
-    // Update stored record
-    const record = verificationStore.get(id);
-    if (record) {
-      verificationStore.set(id, record);
-    }
+    // Store updated record
+    await verificationDO.addParty(id, party);
     
     return jsonResponse({
       success: true,
@@ -252,6 +303,8 @@ export async function addParty(request: IttyRequest): Promise<Response> {
       }
     }, 201);
   } catch (error) {
+    console.error('Add party error:', error);
+    
     if (error instanceof z.ZodError) {
       return jsonResponse({
         success: false,
@@ -269,12 +322,13 @@ export async function addParty(request: IttyRequest): Promise<Response> {
 
 /**
  * POST /api/verifications/:id/verify-party/:partyId
- * Verify a party's identity (after biometric verification)
+ * Verify a party's identity using biometrics
  */
-export async function verifyParty(request: IttyRequest): Promise<Response> {
+export async function verifyParty(request: IttyRequest, env: any): Promise<Response> {
   try {
     const { id, partyId } = request.params;
-    const record = verificationStore.get(id);
+    const verificationDO = getVerificationDO(env, id);
+    const record = await verificationDO.getVerification(id);
     
     if (!record) {
       return jsonResponse({
@@ -291,8 +345,6 @@ export async function verifyParty(request: IttyRequest): Promise<Response> {
       }, 404);
     }
     
-    // In production, this would verify biometrics against stored data
-    // For now, we'll mark as verified if biometrics exist
     if (!party.biometrics) {
       return jsonResponse({
         success: false,
@@ -300,21 +352,52 @@ export async function verifyParty(request: IttyRequest): Promise<Response> {
       }, 400);
     }
     
+    // Perform actual biometric verification
+    const config = getConfig(env);
+    const biometricService = new BiometricService(config);
+    
+    // In production, this would check against stored templates
+    const templateId = `TEMPLATE-${party.id}`;
+    const verificationResult = await biometricService.verifyBiometric(
+      party.biometrics,
+      templateId,
+      party.id
+    );
+    
+    if (!verificationResult.verified) {
+      return jsonResponse({
+        success: false,
+        error: 'Biometric verification failed',
+        details: verificationResult.issues
+      }, 400);
+    }
+    
+    // Update party verification status
     party.isVerified = true;
     party.verifiedAt = new Date();
     
-    // Update record
-    verificationStore.set(id, record);
+    // Update in Durable Object
+    await verificationDO.updateVerification(id, { parties: record.parties });
+    
+    // Log verification
+    console.log('Party verified:', {
+      verificationId: id,
+      partyId,
+      confidence: verificationResult.confidence
+    });
     
     return jsonResponse({
       success: true,
       data: {
         partyId,
         verified: true,
-        verifiedAt: party.verifiedAt
+        verifiedAt: party.verifiedAt,
+        confidence: verificationResult.confidence,
+        matchedBiometricTypes: verificationResult.matchedBiometricTypes
       }
     });
   } catch (error) {
+    console.error('Verify party error:', error);
     return jsonResponse({
       success: false,
       error: 'Failed to verify party'
@@ -326,20 +409,25 @@ export async function verifyParty(request: IttyRequest): Promise<Response> {
  * POST /api/verifications/:id/signatures
  * Collect a signature from a verified party
  */
-export async function collectSignature(request: IttyRequest): Promise<Response> {
+export async function collectSignature(request: IttyRequest, env: any): Promise<Response> {
   try {
     const { id } = request.params;
-    const workflow = workflowStore.get(id);
+    const body = await request.json();
+    const validated = CollectSignatureSchema.parse(body);
     
-    if (!workflow) {
+    // Get verification from Durable Object
+    const verificationDO = getVerificationDO(env, id);
+    const record = await verificationDO.getVerification(id);
+    
+    if (!record) {
       return jsonResponse({
         success: false,
         error: 'Verification not found'
       }, 404);
     }
     
-    const body = await request.json();
-    const validated = CollectSignatureSchema.parse(body);
+    // Create workflow instance
+    const workflow = new VerificationWorkflow(record);
     
     // Collect signature through workflow
     const result = await workflow.collectSignature(
@@ -357,10 +445,10 @@ export async function collectSignature(request: IttyRequest): Promise<Response> 
       }, 400);
     }
     
-    // Update stored record
-    const record = verificationStore.get(id);
-    if (record) {
-      verificationStore.set(id, record);
+    // Store signature in Durable Object
+    const signature = record.signatures.find(s => s.partyId === validated.partyId);
+    if (signature) {
+      await verificationDO.addSignature(id, signature);
     }
     
     return jsonResponse({
@@ -368,9 +456,15 @@ export async function collectSignature(request: IttyRequest): Promise<Response> 
       data: {
         message: result.message,
         fraudSignals: result.fraudSignals
+      },
+      metadata: {
+        currentSignatures: record.currentSignatures,
+        requiredSignatures: record.requiredSignatures
       }
     }, 201);
   } catch (error) {
+    console.error('Collect signature error:', error);
+    
     if (error instanceof z.ZodError) {
       return jsonResponse({
         success: false,
@@ -390,25 +484,25 @@ export async function collectSignature(request: IttyRequest): Promise<Response> 
  * POST /api/verifications/:id/advance
  * Advance the verification workflow
  */
-export async function advanceWorkflow(request: IttyRequest): Promise<Response> {
+export async function advanceWorkflow(request: IttyRequest, env: any): Promise<Response> {
   try {
     const { id } = request.params;
-    const workflow = workflowStore.get(id);
+    const verificationDO = getVerificationDO(env, id);
+    const record = await verificationDO.getVerification(id);
     
-    if (!workflow) {
+    if (!record) {
       return jsonResponse({
         success: false,
         error: 'Verification not found'
       }, 404);
     }
     
-    // Advance workflow to next state
+    const workflow = new VerificationWorkflow(record);
     const result = await workflow.advance();
     
-    // Update stored record
-    const record = verificationStore.get(id);
-    if (record) {
-      verificationStore.set(id, record);
+    // Update record if state changed
+    if (result.success) {
+      await verificationDO.updateVerification(id, { status: record.status });
     }
     
     return jsonResponse({
@@ -416,6 +510,7 @@ export async function advanceWorkflow(request: IttyRequest): Promise<Response> {
       data: result
     });
   } catch (error) {
+    console.error('Advance workflow error:', error);
     return jsonResponse({
       success: false,
       error: 'Failed to advance workflow'
@@ -427,19 +522,20 @@ export async function advanceWorkflow(request: IttyRequest): Promise<Response> {
  * GET /api/verifications/:id/validate
  * Validate the verification status
  */
-export async function validateVerification(request: IttyRequest): Promise<Response> {
+export async function validateVerification(request: IttyRequest, env: any): Promise<Response> {
   try {
     const { id } = request.params;
-    const workflow = workflowStore.get(id);
+    const verificationDO = getVerificationDO(env, id);
+    const record = await verificationDO.getVerification(id);
     
-    if (!workflow) {
+    if (!record) {
       return jsonResponse({
         success: false,
         error: 'Verification not found'
       }, 404);
     }
     
-    // Validate current state
+    const workflow = new VerificationWorkflow(record);
     const validation = await workflow.validateVerification();
     
     return jsonResponse({
@@ -447,6 +543,7 @@ export async function validateVerification(request: IttyRequest): Promise<Respon
       data: validation
     });
   } catch (error) {
+    console.error('Validate verification error:', error);
     return jsonResponse({
       success: false,
       error: 'Failed to validate verification'
@@ -458,35 +555,27 @@ export async function validateVerification(request: IttyRequest): Promise<Respon
  * GET /api/verifications
  * List verifications with filters
  */
-export async function listVerifications(request: IttyRequest): Promise<Response> {
+export async function listVerifications(request: IttyRequest, env: any): Promise<Response> {
   try {
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status');
     const parcelId = searchParams.get('parcelId');
-    const limit = parseInt(searchParams.get('limit') || '10');
+    const limit = Math.min(parseInt(searchParams.get('limit') || '10'), 100);
     const offset = parseInt(searchParams.get('offset') || '0');
     
-    let verifications = Array.from(verificationStore.values());
-    
-    // Apply filters
-    if (status) {
-      verifications = verifications.filter(v => v.status === status);
-    }
-    if (parcelId) {
-      verifications = verifications.filter(v => v.parcelId === parcelId);
-    }
-    
-    // Sort by creation date (newest first)
-    verifications.sort((a, b) => b.initiatedAt.getTime() - a.initiatedAt.getTime());
-    
-    // Paginate
-    const total = verifications.length;
-    const paginated = verifications.slice(offset, offset + limit);
+    // Get from Durable Object (in production, use a separate index DO)
+    const verificationDO = getVerificationDO(env, 'index');
+    const { verifications, total } = await verificationDO.listVerifications({
+      status: status || undefined,
+      parcelId: parcelId || undefined,
+      limit,
+      offset
+    });
     
     return jsonResponse({
       success: true,
       data: {
-        verifications: paginated.map(v => ({
+        verifications: verifications.map(v => ({
           id: v.id,
           parcelId: v.parcelId,
           verificationType: v.verificationType,
@@ -495,7 +584,9 @@ export async function listVerifications(request: IttyRequest): Promise<Response>
           requiredSignatures: v.requiredSignatures,
           initiatedAt: v.initiatedAt,
           expiresAt: v.expiresAt
-        })),
+        }))
+      },
+      metadata: {
         pagination: {
           total,
           limit,
@@ -505,6 +596,7 @@ export async function listVerifications(request: IttyRequest): Promise<Response>
       }
     });
   } catch (error) {
+    console.error('List verifications error:', error);
     return jsonResponse({
       success: false,
       error: 'Failed to list verifications'
