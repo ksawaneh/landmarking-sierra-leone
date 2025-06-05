@@ -1,0 +1,110 @@
+# ETL Pipeline Configuration
+pipeline:
+  name: government-etl
+  mode: incremental  # full | incremental | cdc
+  schedule: "0 2 * * *"  # Daily at 2 AM
+
+# Data Sources
+sources:
+  - name: mlhcp
+    type: database
+    connection: ${MLHCP_CONNECTION_STRING}
+    batchSize: 1000
+    parallelWorkers: 4
+    mockMode: false  # Set to true for development
+    
+  - name: nra
+    type: api
+    baseUrl: ${NRA_API_URL}
+    apiKey: ${NRA_API_KEY}
+    batchSize: 500
+    parallelWorkers: 2
+    mockMode: false
+    
+  - name: oarg
+    type: database
+    connection: ${OARG_CONNECTION_STRING}
+    batchSize: 1000
+    cdcEnabled: true
+    mockMode: false
+
+# Data Transformations
+transformations:
+  - name: normalize
+    type: DataNormalizer
+    order: 1
+    config:
+      validateNationalId: true
+      standardizeAddresses: true
+      
+  - name: geocode
+    type: AddressGeocoder
+    order: 2
+    config:
+      provider: google
+      apiKey: ${GEOCODING_API_KEY}
+      
+  - name: validate
+    type: BoundaryValidator
+    order: 3
+    config:
+      tolerance: 0.0001
+      
+  - name: merge
+    type: DataMerger
+    order: 4
+    config:
+      conflictStrategy: confidence
+      
+  - name: quality
+    type: QualityScorer
+    order: 5
+    config:
+      weights:
+        completeness: 0.3
+        accuracy: 0.3
+        consistency: 0.2
+        timeliness: 0.1
+        uniqueness: 0.1
+
+# Data Destinations
+destinations:
+  - name: postgresql
+    type: postgresql
+    connection: ${DATABASE_URL}
+    config:
+      schema: land_registry
+      createTables: true
+      
+  - name: blockchain
+    type: blockchain
+    config:
+      network: hyperledger
+      channel: land-records
+      chaincode: landregistry
+      
+  - name: cache
+    type: cache
+    config:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+      ttl: 3600
+      
+  - name: search
+    type: search
+    connection: ${ELASTICSEARCH_URL}
+    config:
+      index: land_records
+      mapping: auto
+
+# Monitoring Configuration
+monitoring:
+  metricsPort: 9090
+  dashboardUrl: http://localhost:3000
+  alerts:
+    email:
+      - etl-alerts@landmarking.gov.sl
+      - devops@landmarking.gov.sl
+    sms:
+      - "+23276100000"
+    webhook: ${ALERT_WEBHOOK_URL}
