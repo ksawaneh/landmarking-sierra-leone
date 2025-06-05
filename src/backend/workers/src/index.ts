@@ -7,6 +7,8 @@ import { authHandler } from './handlers/auth';
 import { usersHandler } from './handlers/users';
 import { parcelsHandler } from './handlers/parcels';
 import { AuthSessionDO } from './models/AuthSession';
+import * as verificationHandler from './handlers/verification';
+import * as governmentHandler from './handlers/government';
 
 // Create a new router
 const router = Router();
@@ -43,6 +45,27 @@ router.post('/api/v1/parcels', parcelsHandler.createParcel);
 router.get('/api/v1/parcels/:id', parcelsHandler.getParcel);
 router.put('/api/v1/parcels/:id', parcelsHandler.updateParcel);
 router.delete('/api/v1/parcels/:id', parcelsHandler.deleteParcel);
+
+// Verification routes
+router.post('/api/v1/verifications', verificationHandler.createVerification);
+router.get('/api/v1/verifications', verificationHandler.listVerifications);
+router.get('/api/v1/verifications/:id', verificationHandler.getVerification);
+router.post('/api/v1/verifications/:id/parties', verificationHandler.addParty);
+router.post('/api/v1/verifications/:id/verify-party/:partyId', verificationHandler.verifyParty);
+router.post('/api/v1/verifications/:id/signatures', verificationHandler.collectSignature);
+router.post('/api/v1/verifications/:id/advance', verificationHandler.advanceWorkflow);
+router.get('/api/v1/verifications/:id/validate', verificationHandler.validateVerification);
+
+// Government integration routes
+router.get('/api/v1/government/mlhcp/search', governmentHandler.searchMLHCP);
+router.get('/api/v1/government/mlhcp/:landId', governmentHandler.getMLHCPRecord);
+router.get('/api/v1/government/nra/search', governmentHandler.searchNRA);
+router.get('/api/v1/government/nra/:taxId', governmentHandler.getNRARecord);
+router.get('/api/v1/government/nra/:taxId/compliance', governmentHandler.checkTaxCompliance);
+router.post('/api/v1/government/reconcile', governmentHandler.reconcileRecords);
+router.get('/api/v1/government/search/unified', governmentHandler.unifiedSearch);
+router.get('/api/v1/government/health', governmentHandler.checkHealth);
+router.get('/api/v1/government/districts', governmentHandler.getDistricts);
 
 // Fallback for 404
 router.all('*', () => new Response('Not Found', { status: 404 }));
