@@ -1,0 +1,63 @@
+name = "landmarking-api"
+main = "src/index.ts"
+compatibility_date = "2023-05-20"
+node_compat = true
+
+# Define environment variables
+# These are placeholders; actual values will be set in Cloudflare dashboard
+[vars]
+JWT_SECRET = "DEV_SECRET_DO_NOT_USE_IN_PRODUCTION"
+ENVIRONMENT = "development"
+API_VERSION = "v1"
+CORS_ORIGINS = "http://localhost:3000,https://landmarking.vercel.app"
+
+# Set up KV namespaces
+# KV namespaces are used for storing key-value data
+[[kv_namespaces]]
+binding = "USERS_KV"
+id = "YOUR_KV_ID_HERE" # Replace with actual KV namespace ID when deploying
+preview_id = "YOUR_PREVIEW_KV_ID_HERE" # For preview environments
+
+[[kv_namespaces]]
+binding = "CONFIG_KV"
+id = "YOUR_KV_ID_HERE" # Replace with actual KV namespace ID when deploying
+preview_id = "YOUR_PREVIEW_KV_ID_HERE" # For preview environments
+
+# Set up Durable Object namespaces
+# Durable Objects are used for more complex data storage
+[[durable_objects.bindings]]
+name = "AUTH_SESSIONS"
+class_name = "AuthSessionDO"
+
+[[durable_objects.bindings]]
+name = "PARCEL_DATA"
+class_name = "ParcelDataDO"
+
+# Define migrations for Durable Objects
+[[migrations]]
+tag = "v1"
+new_classes = ["AuthSessionDO", "ParcelDataDO"]
+
+# Custom domains will be configured in production
+[env.production]
+route = { pattern = "api.landmarking.app/*", custom_domain = true }
+[env.production.vars]
+ENVIRONMENT = "production"
+CORS_ORIGINS = "https://landmarking.app,https://www.landmarking.app"
+
+[env.staging]
+name = "landmarking-api-staging"
+[env.staging.vars]
+ENVIRONMENT = "staging"
+CORS_ORIGINS = "https://staging.landmarking.app,https://landmarking.vercel.app"
+
+# Define secrets - these will be set via wrangler CLI or Cloudflare dashboard
+# [secrets]
+# JWT_SECRET
+# API_KEY
+
+# Define R2 bucket for file storage
+[[r2_buckets]]
+binding = "DOCUMENTS_BUCKET"
+bucket_name = "landmarking-documents"
+preview_bucket_name = "landmarking-documents-dev"

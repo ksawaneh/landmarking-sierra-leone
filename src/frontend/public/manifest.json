@@ -1,0 +1,49 @@
+{
+  "name": "LandMarking",
+  "short_name": "LandMarking",
+  "description": "Land Documentation and Registry System for Sierra Leone",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "short_name": "Dashboard",
+      "description": "View your land parcels",
+      "url": "/dashboard",
+      "icons": [
+        {
+          "src": "/icons/dashboard-192x192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Register Parcel",
+      "short_name": "Register",
+      "description": "Register a new land parcel",
+      "url": "/parcels/new",
+      "icons": [
+        {
+          "src": "/icons/register-192x192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,148 @@
+{
+  "regions": [
+    {
+      "name": "Freetown (Capital)",
+      "center": [8.4657, -13.2317],
+      "description": "Capital city of Sierra Leone",
+      "sampleParcels": [
+        {
+          "name": "Downtown Parcel",
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [[
+              [-13.2317, 8.4657],
+              [-13.2307, 8.4657],
+              [-13.2307, 8.4647],
+              [-13.2317, 8.4647],
+              [-13.2317, 8.4657]
+            ]]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Bo",
+      "center": [7.9553, -11.7400],
+      "description": "Second largest city and economic center",
+      "sampleParcels": [
+        {
+          "name": "Bo Community Land",
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [[
+              [-11.7420, 7.9553],
+              [-11.7400, 7.9563],
+              [-11.7380, 7.9553],
+              [-11.7400, 7.9543],
+              [-11.7420, 7.9553]
+            ]]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Kenema",
+      "center": [7.8778, -11.1858],
+      "description": "Major economic center in Eastern Province",
+      "sampleParcels": [
+        {
+          "name": "Kenema Agricultural Land",
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [[
+              [-11.1880, 7.8778],
+              [-11.1850, 7.8788],
+              [-11.1830, 7.8768],
+              [-11.1860, 7.8758],
+              [-11.1880, 7.8778]
+            ]]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Makeni",
+      "center": [8.8861, -12.0442],
+      "description": "Northern province economic hub",
+      "sampleParcels": [
+        {
+          "name": "Makeni Residential Zone",
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [[
+              [-12.0462, 8.8861],
+              [-12.0432, 8.8871],
+              [-12.0422, 8.8851],
+              [-12.0452, 8.8841],
+              [-12.0462, 8.8861]
+            ]]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Koidu",
+      "center": [8.6404, -10.9714],
+      "description": "Diamond mining center in Eastern Province",
+      "sampleParcels": [
+        {
+          "name": "Koidu Mining Area",
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [[
+              [-10.9734, 8.6404],
+              [-10.9704, 8.6414],
+              [-10.9694, 8.6394],
+              [-10.9724, 8.6384],
+              [-10.9734, 8.6404]
+            ]]
+          }
+        }
+      ]
+    }
+  ],
+  "ruralSampleParcels": [
+    {
+      "name": "Rice Farm Tonkolili",
+      "center": [8.6080, -11.9690],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-11.9710, 8.6080],
+          [-11.9680, 8.6090],
+          [-11.9670, 8.6070],
+          [-11.9700, 8.6060],
+          [-11.9710, 8.6080]
+        ]]
+      }
+    },
+    {
+      "name": "Cacao Plantation Kailahun",
+      "center": [8.2775, -10.5734],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-10.5754, 8.2775],
+          [-10.5724, 8.2785],
+          [-10.5714, 8.2765],
+          [-10.5744, 8.2755],
+          [-10.5754, 8.2775]
+        ]]
+      }
+    },
+    {
+      "name": "Community Forest Kono",
+      "center": [8.7619, -10.8204],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-10.8234, 8.7619],
+          [-10.8184, 8.7639],
+          [-10.8174, 8.7599],
+          [-10.8224, 8.7579],
+          [-10.8234, 8.7619]
+        ]]
+      }
+    }
+  ]
+}

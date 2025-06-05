@@ -1,0 +1,30 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "next build",
+  "devCommand": "next dev",
+  "installCommand": "npm install",
+  "github": {
+    "silent": true,
+    "autoAlias": true
+  },
+  "env": {
+    "NEXT_PUBLIC_APP_ENV": "production"
+  },
+  "envVarPopulation": {
+    "MAPBOX_TOKEN": {
+      "development": "@mapbox-dev-token",
+      "preview": "@mapbox-dev-token",
+      "production": "@mapbox-prod-token"
+    },
+    "API_URL": {
+      "development": "http://localhost:8787",
+      "preview": "https://landmarking-api-staging.workers.dev",
+      "production": "https://api.landmarking.app"
+    },
+    "NEXT_PUBLIC_AI_API_URL": {
+      "development": "http://localhost:8000",
+      "preview": "https://landmarking-ai-staging.fly.dev",
+      "production": "https://ai.landmarking.app"
+    }
+  }
+}

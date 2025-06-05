@@ -1,0 +1,51 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/backend/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy Cloudflare Workers
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: src/backend/workers/package-lock.json
+      
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ./src/backend/workers
+      
+      - name: Run Linter
+        run: npm run lint
+        working-directory: ./src/backend/workers
+      
+      - name: Run Type Check
+        run: npm run typecheck
+        working-directory: ./src/backend/workers
+      
+      - name: Run Tests
+        run: npm test
+        working-directory: ./src/backend/workers
+      
+      - name: Publish to Cloudflare Workers (Production)
+        if: github.ref == 'refs/heads/main'
+        run: npm run deploy:production
+        working-directory: ./src/backend/workers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      
+      - name: Notify Deployment
+        if: success()
+        run: |
+          echo "Backend successfully deployed to Cloudflare Workers"

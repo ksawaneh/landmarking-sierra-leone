@@ -1,0 +1,195 @@
+{
+  "home": {
+    "title": "Land Documentation System",
+    "heading": "Secure Your Land, Secure Your Future",
+    "subheading": "A modern land documentation and registration system for Sierra Leone",
+    "dashboard": "Go to Dashboard",
+    "login": "Sign In",
+    "register": "Register",
+    "features": {
+      "title": "Key Features",
+      "mapping": {
+        "title": "GPS Boundary Mapping",
+        "description": "Map your land boundaries using GPS technology, even without internet connectivity."
+      },
+      "verification": {
+        "title": "Community Verification",
+        "description": "Get your land records verified by community members and local authorities."
+      },
+      "registry": {
+        "title": "Secure Digital Registry",
+        "description": "Store your land records securely using blockchain technology to prevent tampering."
+      }
+    }
+  },
+  "nav": {
+    "home": "Home",
+    "about": "About",
+    "services": "Services",
+    "contact": "Contact",
+    "dashboard": "Dashboard",
+    "profile": "Profile",
+    "settings": "Settings",
+    "login": "Sign In",
+    "register": "Register",
+    "logout": "Sign Out"
+  },
+  "header": {
+    "welcome": "Welcome, {{name}}"
+  },
+  "footer": {
+    "about": "About Us",
+    "services": "Services",
+    "contact": "Contact",
+    "privacy": "Privacy Policy",
+    "terms": "Terms of Service",
+    "copyright": "LandMarking. All rights reserved."
+  },
+  "login": {
+    "title": "Sign In",
+    "heading": "Sign in to your account",
+    "subheading": "Don't have an account?",
+    "register_link": "Register now",
+    "email": "Email address",
+    "password": "Password",
+    "remember_me": "Remember me",
+    "forgot_password": "Forgot your password?",
+    "sign_in": "Sign in",
+    "signing_in": "Signing in...",
+    "errors": {
+      "email_required": "Email is required",
+      "email_invalid": "Please enter a valid email address",
+      "password_required": "Password is required",
+      "password_length": "Password must be at least 6 characters",
+      "generic": "Authentication failed. Please check your credentials."
+    }
+  },
+  "register": {
+    "title": "Register",
+    "heading": "Create a new account",
+    "subheading": "Already have an account?",
+    "login_link": "Sign in",
+    "name": "Full name",
+    "email": "Email address",
+    "phone": "Phone number",
+    "password": "Password",
+    "confirm_password": "Confirm password",
+    "terms": "I agree to the terms and conditions",
+    "register": "Register",
+    "registering": "Registering...",
+    "errors": {
+      "name_required": "Name is required",
+      "email_required": "Email is required",
+      "email_invalid": "Please enter a valid email address",
+      "phone_required": "Phone number is required",
+      "phone_invalid": "Please enter a valid phone number",
+      "password_required": "Password is required",
+      "password_length": "Password must be at least 6 characters",
+      "passwords_match": "Passwords must match",
+      "terms_required": "You must agree to the terms and conditions",
+      "generic": "Registration failed. Please try again."
+    }
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "welcome": "Welcome to your dashboard",
+    "recent_activity": "Recent Activity",
+    "no_activity": "No recent activity",
+    "parcels": {
+      "title": "Your Land Parcels",
+      "add_new": "Add New Parcel",
+      "no_parcels": "You don't have any registered parcels yet"
+    },
+    "verification": {
+      "title": "Verification Status",
+      "pending": "Pending",
+      "in_progress": "In Progress",
+      "verified": "Verified",
+      "rejected": "Rejected",
+      "disputed": "Disputed",
+      "draft": "Draft"
+    },
+    "documents": {
+      "title": "Documents",
+      "upload": "Upload Document",
+      "no_documents": "No documents available"
+    }
+  },
+  "map": {
+    "draw": "Draw Boundary",
+    "gps": "Track GPS",
+    "satellite": "Satellite",
+    "standard": "Standard",
+    "terrain": "Terrain",
+    "zoom_in": "Zoom In",
+    "zoom_out": "Zoom Out",
+    "layers": "Layers",
+    "save": "Save",
+    "cancel": "Cancel",
+    "clear": "Clear",
+    "search": "Search location"
+  },
+  "offline": {
+    "offline": "Working Offline",
+    "syncing": "Syncing ({{count}})",
+    "sync_complete": "Sync Complete",
+    "sync_failed": "Sync Failed",
+    "pending_changes": "Pending Changes: {{count}}"
+  },
+  "parcel": {
+    "new": {
+      "title": "Register New Land Parcel",
+      "heading": "Register New Land Parcel",
+      "step_info": "Parcel Information",
+      "step_map": "Map Boundary",
+      "step_confirm": "Confirm & Submit",
+      "info_title": "Parcel Information",
+      "info_description": "Enter basic information about the land parcel",
+      "map_title": "Map Boundary",
+      "map_description": "Draw the boundary of your land parcel or use GPS tracking",
+      "confirm_title": "Confirm & Submit",
+      "confirm_description": "Review your land parcel information before submitting",
+      "land_use": "Land Use",
+      "community": "Community",
+      "select_community": "Select a community",
+      "notes": "Notes",
+      "notes_placeholder": "Additional information about this parcel...",
+      "next": "Next",
+      "back": "Back",
+      "submit": "Submit",
+      "submitting": "Submitting...",
+      "tracking": "GPS Tracking",
+      "start_tracking": "Start GPS Tracking",
+      "stop_tracking": "Stop",
+      "gps_accuracy": "GPS Accuracy",
+      "meters": "meters",
+      "boundary_preview": "Boundary Preview",
+      "success": "Parcel registered successfully",
+      "error": "Failed to register parcel"
+    },
+    "detail": {
+      "title": "Parcel Details",
+      "edit": "Edit",
+      "verify": "Verify",
+      "delete": "Delete",
+      "not_found": "Parcel not found",
+      "information": "Parcel Information",
+      "parcel_number": "Parcel Number",
+      "status": "Status",
+      "land_use": "Land Use",
+      "area": "Area",
+      "created": "Created",
+      "gps_accuracy": "GPS Accuracy",
+      "map": "Parcel Map",
+      "verification": {
+        "title": "Verification",
+        "status": "Status",
+        "verifier": "Verifier",
+        "date": "Verification Date",
+        "comments": "Comments",
+        "submit": "Submit Verification",
+        "request": "Request Verification"
+      }
+    }
+  }
+}

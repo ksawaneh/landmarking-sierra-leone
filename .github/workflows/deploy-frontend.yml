@@ -1,0 +1,51 @@
+name: Deploy Frontend
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/frontend/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy to Vercel
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: src/frontend/package-lock.json
+      
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ./src/frontend
+      
+      - name: Run Linter
+        run: npm run lint
+        working-directory: ./src/frontend
+      
+      - name: Run Tests
+        run: npm test
+        working-directory: ./src/frontend
+        
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+      
+      - name: Deploy to Vercel (Production)
+        if: github.ref == 'refs/heads/main'
+        working-directory: ./src/frontend
+        run: vercel deploy --prod --token ${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      
+      - name: Notify Deployment
+        if: success()
+        run: |
+          echo "Frontend successfully deployed to Vercel"
