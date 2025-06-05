@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  sms-ussd:
+    build: .
+    container_name: landmarking-sms-ussd
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - REDIS_URL=redis://redis:6379
+      - LANDMARKING_API_URL=http://backend:8787
+      - LANDMARKING_API_KEY=${LANDMARKING_API_KEY}
+      # Telco configurations
+      - ORANGE_API_URL=${ORANGE_API_URL}
+      - ORANGE_API_KEY=${ORANGE_API_KEY}
+      - ORANGE_API_SECRET=${ORANGE_API_SECRET}
+      - AFRICELL_API_URL=${AFRICELL_API_URL}
+      - AFRICELL_API_KEY=${AFRICELL_API_KEY}
+      - AFRICELL_API_SECRET=${AFRICELL_API_SECRET}
+      - QCELL_API_URL=${QCELL_API_URL}
+      - QCELL_API_KEY=${QCELL_API_KEY}
+      - QCELL_API_SECRET=${QCELL_API_SECRET}
+      # Other configs
+      - SMS_SENDER_ID=LANDMARK
+      - USSD_SHORT_CODE=*384#
+      - SESSION_TIMEOUT=300
+      - PIN_SALT=${PIN_SALT}
+      - ADMIN_API_KEY=${ADMIN_API_KEY}
+    depends_on:
+      - redis
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - landmarking-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: landmarking-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - landmarking-network
+
+volumes:
+  redis-data:
+
+networks:
+  landmarking-network:
+    driver: bridge
