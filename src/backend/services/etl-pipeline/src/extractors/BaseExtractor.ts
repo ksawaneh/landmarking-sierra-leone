@@ -155,6 +155,25 @@ export abstract class BaseExtractor<T = any> extends EventEmitter {
   protected abstract extractIncrementalData(lastRunTime: Date): Promise<ExtractResult<T>>;
 
   /**
+   * Extract incremental data in batches
+   */
+  async extractIncrementalBatch(lastRunTime: Date, offset: number, limit: number): Promise<ExtractResult<T>> {
+    // Default implementation - subclasses can override for more efficient batching
+    const result = await this.extractIncrementalData(lastRunTime);
+    const paginatedData = result.data.slice(offset, offset + limit);
+    
+    return {
+      data: paginatedData,
+      metadata: {
+        ...result.metadata,
+        recordCount: paginatedData.length,
+        hasMore: offset + limit < result.data.length
+      },
+      errors: result.errors
+    };
+  }
+
+  /**
    * Validate extracted data
    */
   protected validateData(data: any[]): { valid: any[], errors: ExtractError[] } {

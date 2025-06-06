@@ -6,6 +6,8 @@ import { Pool, PoolClient } from 'pg';
 import { BaseLoader } from './BaseLoader';
 import { LoadResult, LoadError, LandRecord } from '../types';
 import { logger } from '../utils/logger';
+import { encryptionService } from '../utils/encryption';
+import { validationService } from '../utils/validation';
 import * as copyFrom from 'pg-copy-streams';
 
 export class PostgreSQLLoader extends BaseLoader<LandRecord> {
@@ -123,20 +125,17 @@ export class PostgreSQLLoader extends BaseLoader<LandRecord> {
   }
 
   protected validateRecord(record: LandRecord): boolean {
-    // Basic validation
-    if (!record.id || !record.parcelNumber) {
+    try {
+      // Use validation service for thorough validation
+      const validated = validationService.validateLandRecord(record);
+      return true;
+    } catch (error) {
+      logger.warn('Record validation failed', { 
+        recordId: record.id, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      });
       return false;
     }
-
-    if (!record.district || !record.owner?.name) {
-      return false;
-    }
-
-    if (record.area <= 0) {
-      return false;
-    }
-
-    return true;
   }
 
   protected getRecordId(record: LandRecord): string {
@@ -176,9 +175,12 @@ export class PostgreSQLLoader extends BaseLoader<LandRecord> {
         
         -- Owner information
         owner_name VARCHAR(255) NOT NULL,
-        owner_national_id VARCHAR(50),
-        owner_phone VARCHAR(20),
-        owner_email VARCHAR(100),
+        owner_national_id VARCHAR(255), -- Encrypted
+        owner_national_id_hash VARCHAR(64), -- For indexing
+        owner_phone VARCHAR(255), -- Encrypted
+        owner_phone_hash VARCHAR(64), -- For indexing
+        owner_email VARCHAR(255), -- Encrypted
+        owner_email_hash VARCHAR(64), -- For indexing,
         
         -- Property details
         land_type VARCHAR(50) NOT NULL,
@@ -220,7 +222,9 @@ export class PostgreSQLLoader extends BaseLoader<LandRecord> {
     await this.client.query(`
       CREATE INDEX IF NOT EXISTS idx_land_records_district ON land_records(district);
       CREATE INDEX IF NOT EXISTS idx_land_records_owner_name ON land_records(owner_name);
-      CREATE INDEX IF NOT EXISTS idx_land_records_owner_national_id ON land_records(owner_national_id);
+      CREATE INDEX IF NOT EXISTS idx_land_records_owner_national_id_hash ON land_records(owner_national_id_hash);
+      CREATE INDEX IF NOT EXISTS idx_land_records_owner_phone_hash ON land_records(owner_phone_hash);
+      CREATE INDEX IF NOT EXISTS idx_land_records_owner_email_hash ON land_records(owner_email_hash);
       CREATE INDEX IF NOT EXISTS idx_land_records_tax_status ON land_records(tax_status);
       CREATE INDEX IF NOT EXISTS idx_land_records_verification_status ON land_records(verification_status);
     `);
@@ -278,12 +282,27 @@ export class PostgreSQLLoader extends BaseLoader<LandRecord> {
   private async insertRecord(record: LandRecord): Promise<void> {
     if (!this.client) return;
 
+    // Validate and sanitize record
+    const validated = validationService.validateLandRecord(record);
+    
+    // Encrypt PII fields
+    const encrypted = encryptionService.encryptPII(validated);
+    
+    // Generate hashes for indexing
+    const nationalIdHash = validated.owner?.nationalId ? 
+      encryptionService.hash(validated.owner.nationalId) : null;
+    const phoneHash = validated.owner?.phoneNumber ? 
+      encryptionService.hash(validated.owner.phoneNumber) : null;
+    const emailHash = validated.owner?.email ? 
+      encryptionService.hash(validated.owner.email) : null;
+
     // Insert main record
     await this.client.query(`
       INSERT INTO land_records (
         id, parcel_number, district, chiefdom, ward, address,
         coordinates, boundaries,
-        owner_name, owner_national_id, owner_phone, owner_email,
+        owner_name, owner_national_id, owner_national_id_hash,
+        owner_phone, owner_phone_hash, owner_email, owner_email_hash,
         land_type, area, land_use,
         current_value, last_valuation_date, tax_assessment,
         title_deed_number, encumbrances,
@@ -292,27 +311,30 @@ export class PostgreSQLLoader extends BaseLoader<LandRecord> {
         source_system, quality_score, created_at, updated_at, version
       ) VALUES (
         $1, $2, $3, $4, $5, $6,
-        ${record.coordinates ? `POINT($7, $8)` : 'NULL'},
-        ${record.boundaries?.length ? `POLYGON($9)` : 'NULL'},
-        $10, $11, $12, $13,
-        $14, $15, $16,
+        ${encrypted.coordinates ? `POINT($7, $8)` : 'NULL'},
+        ${encrypted.boundaries?.length ? `POLYGON($9)` : 'NULL'},
+        $10, $11, $12, $13, $14, $15, $16,
         $17, $18, $19,
-        $20, $21,
-        $22, $23, $24,
+        $20, $21, $22,
+        $23, $24,
         $25, $26, $27,
-        $28, $29, $30, $31, $32
+        $28, $29, $30,
+        $31, $32, $33, $34, $35
       )
     `, [
-      record.id, record.parcelNumber, record.district, record.chiefdom, record.ward, record.address,
-      record.coordinates?.latitude, record.coordinates?.longitude,
-      this.formatBoundaries(record.boundaries),
-      record.owner.name, record.owner.nationalId, record.owner.phoneNumber, record.owner.email,
-      record.landType, record.area, record.landUse,
-      record.currentValue, record.lastValuationDate, record.taxAssessment,
-      record.titleDeedNumber, record.encumbrances,
-      record.taxStatus, record.lastPaymentDate, record.arrearsAmount,
-      record.verificationStatus, record.lastVerificationDate, record.verificationMethod,
-      record.sourceSystem, record.qualityScore, record.createdAt, record.updatedAt, record.version
+      encrypted.id, encrypted.parcelNumber, encrypted.district, encrypted.chiefdom, 
+      encrypted.ward, encrypted.address,
+      encrypted.coordinates?.latitude, encrypted.coordinates?.longitude,
+      this.formatBoundaries(encrypted.boundaries),
+      encrypted.owner.name, encrypted.owner.nationalId, nationalIdHash,
+      encrypted.owner.phoneNumber, phoneHash, encrypted.owner.email, emailHash,
+      encrypted.landType, encrypted.area, encrypted.landUse,
+      encrypted.currentValue, encrypted.lastValuationDate, encrypted.taxAssessment,
+      encrypted.titleDeedNumber, encrypted.encumbrances,
+      encrypted.taxStatus, encrypted.lastPaymentDate, encrypted.arrearsAmount,
+      encrypted.verificationStatus, encrypted.lastVerificationDate, encrypted.verificationMethod,
+      encrypted.sourceSystem, encrypted.qualityScore, encrypted.createdAt, 
+      encrypted.updatedAt, encrypted.version
     ]);
 
     // Insert related data
@@ -322,6 +344,20 @@ export class PostgreSQLLoader extends BaseLoader<LandRecord> {
   private async updateRecord(record: LandRecord): Promise<void> {
     if (!this.client) return;
 
+    // Validate and sanitize record
+    const validated = validationService.validateLandRecord(record);
+    
+    // Encrypt PII fields
+    const encrypted = encryptionService.encryptPII(validated);
+    
+    // Generate hashes for indexing
+    const nationalIdHash = validated.owner?.nationalId ? 
+      encryptionService.hash(validated.owner.nationalId) : null;
+    const phoneHash = validated.owner?.phoneNumber ? 
+      encryptionService.hash(validated.owner.phoneNumber) : null;
+    const emailHash = validated.owner?.email ? 
+      encryptionService.hash(validated.owner.email) : null;
+
     // Update main record
     await this.client.query(`
       UPDATE land_records SET
@@ -330,42 +366,47 @@ export class PostgreSQLLoader extends BaseLoader<LandRecord> {
         chiefdom = $4,
         ward = $5,
         address = $6,
-        coordinates = ${record.coordinates ? `POINT($7, $8)` : 'NULL'},
-        boundaries = ${record.boundaries?.length ? `POLYGON($9)` : 'NULL'},
+        coordinates = ${encrypted.coordinates ? `POINT($7, $8)` : 'NULL'},
+        boundaries = ${encrypted.boundaries?.length ? `POLYGON($9)` : 'NULL'},
         owner_name = $10,
         owner_national_id = $11,
-        owner_phone = $12,
-        owner_email = $13,
-        land_type = $14,
-        area = $15,
-        land_use = $16,
-        current_value = $17,
-        last_valuation_date = $18,
-        tax_assessment = $19,
-        title_deed_number = $20,
-        encumbrances = $21,
-        tax_status = $22,
-        last_payment_date = $23,
-        arrears_amount = $24,
-        verification_status = $25,
-        last_verification_date = $26,
-        verification_method = $27,
-        source_system = $28,
-        quality_score = $29,
-        updated_at = $30,
+        owner_national_id_hash = $12,
+        owner_phone = $13,
+        owner_phone_hash = $14,
+        owner_email = $15,
+        owner_email_hash = $16,
+        land_type = $17,
+        area = $18,
+        land_use = $19,
+        current_value = $20,
+        last_valuation_date = $21,
+        tax_assessment = $22,
+        title_deed_number = $23,
+        encumbrances = $24,
+        tax_status = $25,
+        last_payment_date = $26,
+        arrears_amount = $27,
+        verification_status = $28,
+        last_verification_date = $29,
+        verification_method = $30,
+        source_system = $31,
+        quality_score = $32,
+        updated_at = $33,
         version = version + 1
       WHERE id = $1
     `, [
-      record.id, record.parcelNumber, record.district, record.chiefdom, record.ward, record.address,
-      record.coordinates?.latitude, record.coordinates?.longitude,
-      this.formatBoundaries(record.boundaries),
-      record.owner.name, record.owner.nationalId, record.owner.phoneNumber, record.owner.email,
-      record.landType, record.area, record.landUse,
-      record.currentValue, record.lastValuationDate, record.taxAssessment,
-      record.titleDeedNumber, record.encumbrances,
-      record.taxStatus, record.lastPaymentDate, record.arrearsAmount,
-      record.verificationStatus, record.lastVerificationDate, record.verificationMethod,
-      record.sourceSystem, record.qualityScore, record.updatedAt
+      encrypted.id, encrypted.parcelNumber, encrypted.district, encrypted.chiefdom, 
+      encrypted.ward, encrypted.address,
+      encrypted.coordinates?.latitude, encrypted.coordinates?.longitude,
+      this.formatBoundaries(encrypted.boundaries),
+      encrypted.owner.name, encrypted.owner.nationalId, nationalIdHash,
+      encrypted.owner.phoneNumber, phoneHash, encrypted.owner.email, emailHash,
+      encrypted.landType, encrypted.area, encrypted.landUse,
+      encrypted.currentValue, encrypted.lastValuationDate, encrypted.taxAssessment,
+      encrypted.titleDeedNumber, encrypted.encumbrances,
+      encrypted.taxStatus, encrypted.lastPaymentDate, encrypted.arrearsAmount,
+      encrypted.verificationStatus, encrypted.lastVerificationDate, encrypted.verificationMethod,
+      encrypted.sourceSystem, encrypted.qualityScore, encrypted.updatedAt
     ]);
 
     // Delete and re-insert related data

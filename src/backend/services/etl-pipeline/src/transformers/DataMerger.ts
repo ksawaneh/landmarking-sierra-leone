@@ -17,6 +17,83 @@ export class DataMerger extends BaseTransformer<MergeInput, LandRecord> {
     super('DataMerger');
   }
 
+  /**
+   * Merge multiple records for the same parcel
+   */
+  async mergeRecords(records: LandRecord[]): Promise<LandRecord> {
+    if (records.length === 0) {
+      throw new Error('No records to merge');
+    }
+    
+    if (records.length === 1) {
+      return records[0];
+    }
+
+    // Sort by source priority and updated date
+    const sortedRecords = records.sort((a, b) => {
+      const sourcePriority = { 'MLHCP': 3, 'NRA': 2, 'OARG': 1, 'UNIFIED': 4 };
+      const aPriority = sourcePriority[a.sourceSystem as keyof typeof sourcePriority] || 0;
+      const bPriority = sourcePriority[b.sourceSystem as keyof typeof sourcePriority] || 0;
+      
+      if (aPriority !== bPriority) {
+        return bPriority - aPriority;
+      }
+      
+      return (b.updatedAt?.getTime() || 0) - (a.updatedAt?.getTime() || 0);
+    });
+
+    // Use the highest priority record as base
+    const base = sortedRecords[0];
+    const merged: LandRecord = { ...base };
+
+    // Merge data from other sources
+    for (let i = 1; i < sortedRecords.length; i++) {
+      const record = sortedRecords[i];
+      
+      // Merge fields based on source
+      if (record.sourceSystem === 'NRA') {
+        // Tax-related fields from NRA have priority
+        merged.taxStatus = record.taxStatus || merged.taxStatus;
+        merged.lastPaymentDate = record.lastPaymentDate || merged.lastPaymentDate;
+        merged.arrearsAmount = record.arrearsAmount ?? merged.arrearsAmount;
+        merged.currentValue = record.currentValue || merged.currentValue;
+        merged.taxAssessment = record.taxAssessment || merged.taxAssessment;
+      }
+      
+      if (record.sourceSystem === 'OARG') {
+        // Legal fields from OARG have priority
+        merged.titleDeedNumber = record.titleDeedNumber || merged.titleDeedNumber;
+        merged.encumbrances = this.mergeArrays(
+          merged.encumbrances || [],
+          record.encumbrances || []
+        );
+      }
+      
+      // Merge structures and disputes
+      if (record.structures?.length) {
+        merged.structures = this.mergeStructures(
+          merged.structures || [],
+          record.structures
+        );
+      }
+      
+      if (record.disputes?.length) {
+        merged.disputes = this.mergeDisputes(
+          merged.disputes || [],
+          record.disputes
+        );
+      }
+    }
+
+    // Update metadata
+    merged.sourceSystem = 'UNIFIED';
+    merged.qualityScore = this.calculateMergedQualityScore({ mlhcp: base });
+    merged.updatedAt = new Date();
+    merged.version = Math.max(...records.map(r => r.version || 1)) + 1;
+
+    return merged;
+  }
+
   protected transformRecord(input: MergeInput): LandRecord {
     if (!input.mlhcp) {
       throw new Error('MLHCP record is required for merging');
@@ -208,6 +285,39 @@ export class DataMerger extends BaseTransformer<MergeInput, LandRecord> {
     // Sort by from date
     return Array.from(ownerMap.values()).sort((a, b) => 
       a.from.getTime() - b.from.getTime()
+    );
+  }
+
+  private mergeStructures(
+    structures1: NonNullable<LandRecord['structures']>,
+    structures2: NonNullable<LandRecord['structures']>
+  ): NonNullable<LandRecord['structures']> {
+    const structureMap = new Map<string, typeof structures1[0]>();
+    
+    // Add all structures to map, using type+yearBuilt as key
+    [...structures1, ...structures2].forEach(structure => {
+      const key = `${structure.type}-${structure.yearBuilt || 'unknown'}`;
+      structureMap.set(key, structure);
+    });
+    
+    return Array.from(structureMap.values());
+  }
+
+  private mergeDisputes(
+    disputes1: NonNullable<LandRecord['disputes']>,
+    disputes2: NonNullable<LandRecord['disputes']>
+  ): NonNullable<LandRecord['disputes']> {
+    const disputeMap = new Map<string, typeof disputes1[0]>();
+    
+    // Add all disputes to map, using type+filedDate as key
+    [...disputes1, ...disputes2].forEach(dispute => {
+      const key = `${dispute.type}-${dispute.filedDate.getTime()}`;
+      disputeMap.set(key, dispute);
+    });
+    
+    // Sort by filed date (most recent first)
+    return Array.from(disputeMap.values()).sort((a, b) => 
+      b.filedDate.getTime() - a.filedDate.getTime()
     );
   }
 

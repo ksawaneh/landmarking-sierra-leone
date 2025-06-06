@@ -122,6 +122,28 @@ export function loadConfig(configPath?: string): PipelineConfig {
  * Get default configuration
  */
 function getDefaultConfig(): PipelineConfig {
+  // Validate required environment variables
+  const requiredEnvVars = [
+    'DATABASE_URL',
+    'MLHCP_CONNECTION_STRING',
+    'NRA_API_URL'
+  ];
+  
+  const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+  if (missingVars.length > 0) {
+    throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+  }
+
+  // Validate API keys if not in mock mode
+  const isMockMode = process.env.NODE_ENV === 'development' || process.env.MOCK_MODE === 'true';
+  if (!isMockMode) {
+    const requiredApiKeys = ['MLHCP_API_KEY', 'NRA_API_KEY'];
+    const missingKeys = requiredApiKeys.filter(key => !process.env[key]);
+    if (missingKeys.length > 0) {
+      throw new Error(`Missing required API keys for production mode: ${missingKeys.join(', ')}`);
+    }
+  }
+
   return {
     name: 'government-etl',
     mode: PipelineMode.INCREMENTAL,
@@ -131,18 +153,18 @@ function getDefaultConfig(): PipelineConfig {
       {
         name: 'mlhcp',
         type: 'database',
-        connection: process.env.MLHCP_CONNECTION_STRING || '',
+        connection: process.env.MLHCP_CONNECTION_STRING!,
         batchSize: 1000,
         parallelWorkers: 2,
-        mockMode: true // Use mock mode by default
+        mockMode: isMockMode
       },
       {
         name: 'nra',
         type: 'api',
-        baseUrl: process.env.NRA_API_URL || '',
-        apiKey: process.env.NRA_API_KEY || '',
+        baseUrl: process.env.NRA_API_URL!,
+        apiKey: process.env.NRA_API_KEY || undefined,
         batchSize: 500,
-        mockMode: true
+        mockMode: isMockMode
       }
     ],
     
@@ -163,7 +185,7 @@ function getDefaultConfig(): PipelineConfig {
       {
         name: 'postgresql',
         type: 'postgresql',
-        connection: process.env.DATABASE_URL || 'postgresql://localhost/landmarking'
+        connection: process.env.DATABASE_URL!
       }
     ],
     
@@ -184,7 +206,11 @@ function replaceEnvVars(obj: any): any {
   if (typeof obj === 'string') {
     // Replace ${VAR_NAME} with environment variable value
     return obj.replace(/\${([^}]+)}/g, (match, varName) => {
-      return process.env[varName] || match;
+      const value = process.env[varName];
+      if (!value && varName.includes('KEY') || varName.includes('PASSWORD')) {
+        logger.warn(`Sensitive environment variable ${varName} is not set`);
+      }
+      return value || match;
     });
   }
   

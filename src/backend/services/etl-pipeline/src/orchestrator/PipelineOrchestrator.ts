@@ -3,6 +3,8 @@
  */
 
 import { EventEmitter } from 'events';
+import { Transform, Readable, pipeline } from 'stream';
+import { promisify } from 'util';
 import Bull from 'bull';
 import { 
   PipelineConfig, 
@@ -21,7 +23,11 @@ import { PostgreSQLLoader } from '../loaders/PostgreSQLLoader';
 import { logger } from '../utils/logger';
 import { MetricsCollector } from '../monitoring/MetricsCollector';
 import { AlertManager } from '../monitoring/AlertManager';
+import { CircuitBreakerFactory } from '../utils/circuitBreaker';
+import { retry } from '../utils/retry';
 import { v4 as uuidv4 } from 'uuid';
+
+const pipelineAsync = promisify(pipeline);
 
 export class PipelineOrchestrator extends EventEmitter {
   private config: PipelineConfig;
@@ -85,10 +91,10 @@ export class PipelineOrchestrator extends EventEmitter {
         pipelineName: this.config.name
       });
 
-      // Execute pipeline stages
-      const extractedData = await this.extractStage(mode);
-      const transformedData = await this.transformStage(extractedData);
-      const loadResult = await this.loadStage(transformedData);
+      // Execute pipeline stages with streaming
+      const extractedStreams = await this.extractStage(mode);
+      const transformedStream = await this.transformStage(extractedStreams);
+      await this.loadStage(transformedStream);
 
       // Update metrics
       this.currentRun.endTime = new Date();
@@ -137,161 +143,292 @@ export class PipelineOrchestrator extends EventEmitter {
   }
 
   /**
-   * Extract stage - get data from all sources
+   * Extract stage - get data from all sources with streaming support
    */
-  private async extractStage(mode: PipelineMode): Promise<Map<string, LandRecord[]>> {
+  private async extractStage(mode: PipelineMode): Promise<Map<string, AsyncIterable<LandRecord>>> {
     logger.info('Starting extract stage');
-    const extractedData = new Map<string, LandRecord[]>();
+    const extractedStreams = new Map<string, AsyncIterable<LandRecord>>();
     const extractors = this.createExtractors();
 
     // Get last run time for incremental mode
     const lastRunTime = mode === PipelineMode.INCREMENTAL ? 
       await this.getLastRunTime() : undefined;
 
-    // Extract from each source in parallel
-    const extractPromises = Array.from(extractors.entries()).map(async ([name, extractor]) => {
-      try {
-        this.emit('extract:start', { source: name });
-        
-        const result = mode === PipelineMode.INCREMENTAL && lastRunTime ?
-          await extractor.extractIncremental(lastRunTime) :
-          await extractor.extractAll();
+    // Create extraction streams for each source
+    for (const [name, extractor] of extractors) {
+      const circuitBreaker = CircuitBreakerFactory.create(`extractor-${name}`, {
+        failureThreshold: 3,
+        resetTimeout: 60000
+      });
 
-        extractedData.set(name, result.data);
-        
-        if (this.currentRun) {
-          this.currentRun.metrics.recordsExtracted += result.data.length;
-          this.currentRun.errors.push(...result.errors.map(e => ({
-            stage: 'extract' as const,
-            source: name,
-            error: e.error,
-            timestamp: e.timestamp,
-            context: e.record
-          })));
+      // Create async generator for streaming extraction
+      const extractStream = async function* () {
+        try {
+          this.emit('extract:start', { source: name });
+          
+          // Get data in batches
+          let offset = 0;
+          const batchSize = extractor.batchSize || 1000;
+          let hasMore = true;
+          
+          while (hasMore) {
+            const batch = await circuitBreaker.execute(async () => {
+              return retry(async () => {
+                if (mode === PipelineMode.INCREMENTAL && lastRunTime) {
+                  return await extractor.extractIncrementalBatch(lastRunTime, offset, batchSize);
+                } else {
+                  return await extractor.extractBatch(offset, batchSize);
+                }
+              }, {
+                maxAttempts: 3,
+                initialDelay: 1000,
+                onRetry: (error, attempt) => {
+                  logger.warn(`Retrying extraction for ${name}`, { attempt, error: error.message });
+                }
+              });
+            });
+            
+            if (batch.data.length === 0) {
+              hasMore = false;
+            } else {
+              // Yield each record
+              for (const record of batch.data) {
+                yield record;
+              }
+              
+              if (this.currentRun) {
+                this.currentRun.metrics.recordsExtracted += batch.data.length;
+              }
+              
+              offset += batch.data.length;
+              
+              // Check if we got less than batch size (indicates end of data)
+              if (batch.data.length < batchSize) {
+                hasMore = false;
+              }
+            }
+          }
+          
+          this.emit('extract:complete', { source: name });
+        } catch (error) {
+          logger.error(`Extract failed for ${name}`, error);
+          
+          if (this.currentRun) {
+            this.currentRun.errors.push({
+              stage: 'extract',
+              source: name,
+              error: error instanceof Error ? error.message : 'Extract failed',
+              timestamp: new Date()
+            });
+          }
+          
+          throw error;
         }
-
-        this.metricsCollector.recordExtraction(name, result.metadata);
-        this.emit('extract:complete', { source: name, result });
-        
-        return result;
-      } catch (error) {
-        logger.error(`Extract failed for ${name}`, error);
-        
-        if (this.currentRun) {
-          this.currentRun.errors.push({
-            stage: 'extract',
-            source: name,
-            error: error instanceof Error ? error.message : 'Extract failed',
-            timestamp: new Date()
-          });
-        }
-
-        throw error;
-      }
-    });
-
-    await Promise.all(extractPromises);
+      }.bind(this)();
+      
+      extractedStreams.set(name, extractStream);
+    }
     
-    logger.info('Extract stage completed', {
-      sources: extractedData.size,
-      totalRecords: Array.from(extractedData.values()).reduce((sum, records) => sum + records.length, 0)
+    logger.info('Extract stage initialized', {
+      sources: extractedStreams.size
     });
 
-    return extractedData;
+    return extractedStreams;
   }
 
   /**
-   * Transform stage - normalize and merge data
+   * Transform stage - normalize and merge data with streaming
    */
   private async transformStage(
-    extractedData: Map<string, LandRecord[]>
-  ): Promise<LandRecord[]> {
+    extractedStreams: Map<string, AsyncIterable<LandRecord>>
+  ): Promise<AsyncIterable<LandRecord>> {
     logger.info('Starting transform stage');
     
-    // First, normalize all data
     const normalizer = new DataNormalizer();
-    const normalizedData = new Map<string, LandRecord[]>();
-
-    for (const [source, records] of extractedData) {
-      this.emit('transform:start', { transformer: 'DataNormalizer', source });
-      
-      const result = await normalizer.transform(records);
-      normalizedData.set(source, result.data);
-      
-      if (this.currentRun) {
-        this.currentRun.metrics.recordsTransformed += result.data.length;
-      }
-
-      this.metricsCollector.recordTransformation('normalize', result.metadata);
-      this.emit('transform:complete', { transformer: 'DataNormalizer', result });
-    }
-
-    // Then merge data from different sources
     const merger = new DataMerger();
-    const allRecords: LandRecord[] = [];
     
-    // Collect all records for merging
-    for (const records of normalizedData.values()) {
-      allRecords.push(...records);
-    }
-
-    this.emit('transform:start', { transformer: 'DataMerger' });
-    const mergeResult = await merger.mergeByParcelId(allRecords);
-    
-    if (this.currentRun) {
-      this.currentRun.metrics.recordsTransformed = mergeResult.data.length;
+    // Create transform stream
+    const transformStream = async function* () {
+      // Process each source stream in parallel
+      const sourcePromises = Array.from(extractedStreams.entries()).map(async ([source, stream]) => {
+        const normalizedRecords: LandRecord[] = [];
+        
+        this.emit('transform:start', { transformer: 'DataNormalizer', source });
+        
+        // Process records in batches
+        const batchSize = 100;
+        let batch: LandRecord[] = [];
+        
+        for await (const record of stream) {
+          batch.push(record);
+          
+          if (batch.length >= batchSize) {
+            // Normalize batch
+            const result = await normalizer.transform(batch);
+            normalizedRecords.push(...result.data);
+            
+            if (this.currentRun) {
+              this.currentRun.metrics.recordsTransformed += result.data.length;
+            }
+            
+            batch = [];
+          }
+        }
+        
+        // Process remaining records
+        if (batch.length > 0) {
+          const result = await normalizer.transform(batch);
+          normalizedRecords.push(...result.data);
+          
+          if (this.currentRun) {
+            this.currentRun.metrics.recordsTransformed += result.data.length;
+          }
+        }
+        
+        this.emit('transform:complete', { transformer: 'DataNormalizer', source });
+        
+        return { source, records: normalizedRecords };
+      });
       
-      // Check quality and send alerts if needed
-      if (mergeResult.qualityReport.overallScore < 0.7) {
-        await this.alertManager.sendAlert({
-          id: uuidv4(),
-          type: 'warning',
-          severity: 'medium',
-          title: 'Low Data Quality',
-          message: `Data quality score: ${mergeResult.qualityReport.overallScore}`,
-          source: 'DataMerger',
-          timestamp: new Date(),
-          resolved: false,
-          metadata: mergeResult.qualityReport
-        });
+      // Wait for all sources to be normalized
+      const normalizedSources = await Promise.all(sourcePromises);
+      
+      // Merge records by parcel ID in batches
+      this.emit('transform:start', { transformer: 'DataMerger' });
+      
+      const recordsByParcelId = new Map<string, LandRecord[]>();
+      
+      // Group records by parcel ID
+      for (const { records } of normalizedSources) {
+        for (const record of records) {
+          const existing = recordsByParcelId.get(record.parcelNumber) || [];
+          existing.push(record);
+          recordsByParcelId.set(record.parcelNumber, existing);
+        }
       }
-    }
-
-    this.metricsCollector.recordTransformation('merge', mergeResult.metadata);
-    this.emit('transform:complete', { transformer: 'DataMerger', result: mergeResult });
-
-    logger.info('Transform stage completed', {
-      recordsTransformed: mergeResult.data.length,
-      qualityScore: mergeResult.qualityReport.overallScore
-    });
-
-    return mergeResult.data;
+      
+      // Merge and yield records
+      const mergeBatchSize = 50;
+      let mergeBatch: LandRecord[] = [];
+      
+      for (const [parcelId, records] of recordsByParcelId) {
+        if (records.length === 1) {
+          // No merge needed
+          mergeBatch.push(records[0]);
+        } else {
+          // Merge multiple records
+          const merged = await merger.mergeRecords(records);
+          mergeBatch.push(merged);
+        }
+        
+        if (mergeBatch.length >= mergeBatchSize) {
+          // Yield batch
+          for (const record of mergeBatch) {
+            yield record;
+          }
+          mergeBatch = [];
+        }
+      }
+      
+      // Yield remaining records
+      for (const record of mergeBatch) {
+        yield record;
+      }
+      
+      this.emit('transform:complete', { transformer: 'DataMerger' });
+      
+      logger.info('Transform stage completed');
+    }.bind(this)();
+    
+    return transformStream;
   }
 
   /**
-   * Load stage - save data to destinations
+   * Load stage - save data to destinations with streaming
    */
-  private async loadStage(records: LandRecord[]): Promise<void> {
+  private async loadStage(recordStream: AsyncIterable<LandRecord>): Promise<void> {
     logger.info('Starting load stage');
     
     const loaders = this.createLoaders();
+    const loadBatchSize = 100;
     
-    // Load to each destination
+    // Create load streams for each destination
     const loadPromises = Array.from(loaders.entries()).map(async ([name, loader]) => {
+      const circuitBreaker = CircuitBreakerFactory.create(`loader-${name}`, {
+        failureThreshold: 3,
+        resetTimeout: 60000
+      });
+      
       try {
         this.emit('load:start', { destination: name });
         
-        const result = await loader.load(records);
+        await loader.connect();
         
-        if (this.currentRun) {
-          this.currentRun.metrics.recordsLoaded += result.metadata.recordsLoaded;
-          this.currentRun.metrics.recordsFailed += result.errors.length;
+        let batch: LandRecord[] = [];
+        let totalLoaded = 0;
+        let totalFailed = 0;
+        
+        // Process records in batches
+        for await (const record of recordStream) {
+          batch.push(record);
+          
+          if (batch.length >= loadBatchSize) {
+            // Load batch with circuit breaker and retry
+            const result = await circuitBreaker.execute(async () => {
+              return retry(async () => {
+                return await loader.loadBatch(batch);
+              }, {
+                maxAttempts: 3,
+                initialDelay: 1000,
+                onRetry: (error, attempt) => {
+                  logger.warn(`Retrying load for ${name}`, { attempt, error: error.message });
+                }
+              });
+            });
+            
+            totalLoaded += result.metadata.recordsLoaded;
+            totalFailed += result.errors.length;
+            
+            if (this.currentRun) {
+              this.currentRun.metrics.recordsLoaded += result.metadata.recordsLoaded;
+              this.currentRun.metrics.recordsFailed += result.errors.length;
+            }
+            
+            this.metricsCollector.recordLoad(name, result.metadata);
+            
+            batch = [];
+          }
         }
-
-        this.metricsCollector.recordLoad(name, result.metadata);
-        this.emit('load:complete', { destination: name, result });
         
-        return result;
+        // Load remaining records
+        if (batch.length > 0) {
+          const result = await circuitBreaker.execute(async () => {
+            return retry(async () => {
+              return await loader.loadBatch(batch);
+            });
+          });
+          
+          totalLoaded += result.metadata.recordsLoaded;
+          totalFailed += result.errors.length;
+          
+          if (this.currentRun) {
+            this.currentRun.metrics.recordsLoaded += result.metadata.recordsLoaded;
+            this.currentRun.metrics.recordsFailed += result.errors.length;
+          }
+        }
+        
+        await loader.disconnect();
+        
+        this.emit('load:complete', { 
+          destination: name, 
+          totalLoaded,
+          totalFailed
+        });
+        
+        logger.info(`Load completed for ${name}`, {
+          recordsLoaded: totalLoaded,
+          recordsFailed: totalFailed
+        });
       } catch (error) {
         logger.error(`Load failed for ${name}`, error);
         
@@ -303,7 +440,7 @@ export class PipelineOrchestrator extends EventEmitter {
             timestamp: new Date()
           });
         }
-
+        
         // Don't throw - allow other loaders to continue
       }
     });
